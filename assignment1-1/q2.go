@@ -7,6 +7,8 @@ import (
 	"strconv"
 )
 
+// test comment
+
 // Sum numbers from channel `nums` and output sum to `out`.
 // You should only output to `out` once.
 // Do NOT modify function signature.
