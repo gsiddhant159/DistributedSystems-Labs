@@ -2,3 +2,4 @@
 go.work
 go.mod
 lock
+.DS_Store
