@@ -23,26 +23,25 @@ func (mr *Master) schedule(phase jobPhase) {
 	debug("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 
 	tasks := make(chan task, ntasks)
-	completed := make(chan task, ntasks)
+	out := make(chan task, ntasks)
 
 	go populateTasks(tasks, ntasks, phase, mr.files)
 
-	for len(completed) < ntasks {
-		if len(tasks) == 0 {
-			continue // This short cictuits the loop when no more tasks to schedule
+	var nCompleted int
+	for nCompleted < ntasks {
+		select {
+		case t := <-tasks:
+			debug("%v: Assigning task %v\n", phase, t.number)
+			go assignTask(t, out, mr, phase, nios)
+		case t := <-out:
+			debug("%v: received %v status from task %v\n", phase, t.status, t.number)
+			if t.status {
+				nCompleted += 1
+				debug("%v: nCompleted = %v\n", phase, nCompleted)
+			} else {
+				tasks <- t
+			}
 		}
-		debug("%v: Completed: %v tasks\n", phase, len(completed))
-		worker := <-mr.registerChannel
-		debug("%v: Assigning %v with %v tasks\n", phase, worker, len(tasks))
-		go assignTask(
-			tasks,
-			completed,
-			mr.registerChannel,
-			worker,
-			mr.jobName,
-			phase,
-			nios,
-		)
 	}
 	debug("Schedule: %v phase done\n", phase)
 }
@@ -63,34 +62,32 @@ func populateTasks(tasks chan task, ntasks int, phase jobPhase, files []string) 
 }
 
 func assignTask(
-	tasks chan task,
-	completed chan task,
-	registerChannel chan string,
-	worker, jobName string,
+	t task,
+	out chan task,
+	mr *Master,
 	phase jobPhase,
 	numOtherPhase int,
 ) {
-	debug("%v: AssignTask: on %v with %v tasks\n", phase, worker, len(tasks))
-	t := <-tasks
+	debug("%v: acquiring worker for task %v\n", phase, t.number)
+	worker := <-mr.registerChannel
 	doTaskArgs := DoTaskArgs{
-		JobName:       jobName,
+		JobName:       mr.jobName,
 		NumOtherPhase: numOtherPhase,
 		Phase:         phase,
 		File:          t.filename,
 		TaskNumber:    t.number,
 	}
 	debug("%v: %v working with %v\n", phase, worker, doTaskArgs)
-	ok := call(worker, "Worker.DoTask", &doTaskArgs, nil)
-	if ok {
-		completed <- t
-	} else {
-		debug("Error occured in rpc call to Worker %v\n", worker)
-		tasks <- t
-	}
-	registerChannel <- worker
+	t.status = call(worker, "Worker.DoTask", &doTaskArgs, nil)
+	debug("%v: %v finished for %v\n", phase, worker, t.number)
+	out <- t
+	debug("%v: %v exited for %v\n", phase, worker, t.number)
+	mr.registerChannel <- worker
+	debug("%v: %v re-registered after %v\n", phase, worker, t.number)
 }
 
 type task struct {
 	number   int
 	filename string
+	status   bool
 }
