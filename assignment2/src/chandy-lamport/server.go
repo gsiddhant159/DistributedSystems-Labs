@@ -14,6 +14,15 @@ type Server struct {
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
 	// TODO: ADD MORE FIELDS HERE
+	Snaps map[int]*serverSnapshot // key = snapshotId
+}
+
+// server's local snapshot state
+type serverSnapshot struct {
+	CLstarted   bool
+	CLcompleted map[string]bool //size = len(outboundLinks)
+	numtoken    int
+	messages    []*SnapshotMessage
 }
 
 // A unidirectional communication channel between two servers
@@ -31,6 +40,8 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
+		// TODO
+		make(map[int]*serverSnapshot),
 	}
 }
 
@@ -80,15 +91,50 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 		server.sim.GetReceiveTime()})
 }
 
+func (server *Server) receiveTokens(src string, message TokenMessage) {
+	server.Tokens += message.numTokens
+	for _, snap := range server.Snaps {
+		if snap.CLstarted && !snap.CLcompleted[src] {
+			snap.messages = append(snap.messages, &SnapshotMessage{src, server.Id, message})
+		}
+	}
+}
+
+func (server *Server) receiveMarker(src string, message MarkerMessage) {
+	id := message.snapshotId
+	snap := server.Snaps[id]
+	if snap == nil {
+		server.StartSnapshot(id)
+	} else {
+		snap.CLcompleted[src] = true
+		if len(snap.CLcompleted) == len(server.inboundLinks) {
+			go server.sim.NotifySnapshotComplete(server.Id, id)
+		}
+	}
+}
+
 // Callback for when a message is received on this server.
 // When the snapshot algorithm completes on this server, this function
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
 	// TODO: IMPLEMENT ME
+	server.sim.logger.RecordEvent(server, ReceivedMessageEvent{src: src, dest: server.Id, message: message})
+	switch message := message.(type) {
+	case TokenMessage:
+		server.receiveTokens(src, message)
+	case MarkerMessage:
+		server.receiveMarker(src, message)
+	}
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
 	// TODO: IMPLEMENT ME
+	snap := serverSnapshot{true, make(map[string]bool), server.Tokens, make([]*SnapshotMessage, 0)}
+	server.Snaps[snapshotId] = &snap
+
+	// send marker on all outgoing channel
+	server.SendToNeighbors(MarkerMessage{snapshotId: snapshotId})
+
 }
