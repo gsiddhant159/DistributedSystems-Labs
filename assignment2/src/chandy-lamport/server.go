@@ -1,6 +1,9 @@
 package chandy_lamport
 
-import "log"
+import (
+	"fmt"
+	"log"
+)
 
 // The main participant of the distributed snapshot protocol.
 // Servers exchange token messages and marker messages among each other.
@@ -101,15 +104,16 @@ func (server *Server) receiveTokens(src string, message TokenMessage) {
 }
 
 func (server *Server) receiveMarker(src string, message MarkerMessage) {
+	fmt.Printf("%v received marker from %v \n", server.Id, src)
 	id := message.snapshotId
 	snap := server.Snaps[id]
 	if snap == nil {
 		server.StartSnapshot(id)
-	} else {
-		snap.CLcompleted[src] = true
-		if len(snap.CLcompleted) == len(server.inboundLinks) {
-			go server.sim.NotifySnapshotComplete(server.Id, id)
-		}
+		snap = server.Snaps[id]
+	}
+	snap.CLcompleted[src] = true
+	if len(snap.CLcompleted) == len(server.inboundLinks) {
+		go server.sim.NotifySnapshotComplete(server.Id, id)
 	}
 }
 
@@ -131,8 +135,7 @@ func (server *Server) HandlePacket(src string, message interface{}) {
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
 	// TODO: IMPLEMENT ME
-	snap := serverSnapshot{true, make(map[string]bool), server.Tokens, make([]*SnapshotMessage, 0)}
-	server.Snaps[snapshotId] = &snap
+	server.Snaps[snapshotId] = &serverSnapshot{true, make(map[string]bool), server.Tokens, make([]*SnapshotMessage, 0)}
 
 	// send marker on all outgoing channel
 	server.SendToNeighbors(MarkerMessage{snapshotId: snapshotId})

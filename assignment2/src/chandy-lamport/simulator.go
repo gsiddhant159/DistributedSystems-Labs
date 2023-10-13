@@ -1,6 +1,7 @@
 package chandy_lamport
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 )
@@ -113,6 +114,7 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
 	sim.notifyChannels[snapshotId] = make(chan string, len(sim.servers))
+	fmt.Printf("Starting snapshot %v on %v \n", snapshotId, serverId)
 	sim.servers[serverId].StartSnapshot(snapshotId)
 }
 
@@ -131,10 +133,12 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	// TODO: IMPLEMENT ME
 	for i := 0; i < len(sim.servers); i++ {
 		serverId := <-sim.notifyChannels[snapshotId]
+		fmt.Printf("SnapID %v: Snap received from %v \n", snapshotId, serverId)
 		serversnap := sim.servers[serverId].Snaps[snapshotId]
 		delete(sim.servers[serverId].Snaps, snapshotId) // Prevent memory leak
 		snap.tokens[serverId] = serversnap.numtoken
 		snap.messages = append(snap.messages, serversnap.messages...)
 	}
+	delete(sim.notifyChannels, snapshotId)
 	return &snap
 }
