@@ -60,7 +60,7 @@ type Raft struct {
 }
 type Log struct {
 	term  int
-	value string //placeholder
+	value interface{}
 }
 
 // return currentTerm and whether this server
@@ -108,12 +108,49 @@ type RequestVoteArgs struct {
 
 // example RequestVote RPC reply structure.
 type RequestVoteReply struct {
-	// Your data here.
 	term        int
 	voteGranted bool
 }
 
-func (rf *Raft) AppendEntry(args, reply) {
+type AppendEntryArgs struct {
+	term         int
+	prevLogTerm  int
+	prevLogIndex int
+	value        interface{}
+}
+
+type AppendEntryReply struct {
+	term int
+	ok   bool
+}
+
+func (rf *Raft) AppendEntry(args AppendEntryArgs, reply *AppendEntryReply) {
+	reply.term = args.term
+	if rf.currentTerm > args.term { // Reject old leader?
+		reply.ok = false
+		reply.term = rf.currentTerm
+		return
+	}
+
+	// Heartbeat check
+	if args.value == nil {
+		// rf.ECGchan <- true // means heartbeat detected
+		reply.ok = true
+		return
+	}
+
+	// Checking if previous entry in my log matches previous entry of incoming log
+	L := len(rf.log)
+	if L > 0 &&
+		(rf.log[L-1].term != args.prevLogTerm ||
+			L-1 != args.prevLogIndex) {
+		reply.ok = false
+		return
+	}
+
+	// Else, accept incoming request
+	rf.log = append(rf.log, Log{term: args.term, value: args.value})
+	reply.ok = true
 
 }
 
@@ -175,13 +212,45 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
+	index := len(rf.log)
+	term := rf.currentTerm
 	isLeader := true
 
-	if command == nil {
-		// received heartbeat
+	rf.log = append(rf.log, Log{term: term, value: command})
+
+	args := AppendEntryArgs{
+		term:         rf.currentTerm,
+		prevLogTerm:  -1,
+		prevLogIndex: -1,
+		value:        command,
 	}
+
+	L := len(rf.log)
+	if L > 0 {
+		args.prevLogTerm = rf.log[L-1].term
+		args.prevLogIndex = L - 1
+	}
+
+	reply := AppendEntryReply{}
+
+	count := 0
+	for peer := range rf.peers {
+		go func(peer int) {
+			rf.peers[peer].Call("Raft.AppendEntry", args, &reply)
+
+			if reply.ok {
+				count += 1
+			}
+			if reply.term > term {
+				term = reply.term
+				isLeader = false
+			}
+		}(peer)
+	}
+
+	// if count > len(rf.peers)/2 {
+	// 	rf.applyCh(ApplyMsg{Index:index, Command: command})
+	// }
 
 	return index, term, isLeader
 }
@@ -211,17 +280,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	rf.applyCh = applyCh
+	//go timeout(rf.ECGchan)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// Possibly initalise a server entering the pool with the values of current leader
 
-	go rf.ECG()
+	// go rf.ECG()
 
 	return rf
 }
 
-func (rf *Raft) ECG() {
+// func (rf *Raft) ECG() {
 
-}
+// }
