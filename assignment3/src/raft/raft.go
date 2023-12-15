@@ -198,6 +198,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.VoteGranted = true
 	reply.Term = args.Term
+	rf.votedFor = args.CandidateId
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -258,6 +259,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	if command != nil {
 		rf.log = append(rf.log, Log{term: term, value: command})
+	} else {
+		rf.restartTimer()
 	}
 
 	args := AppendEntryArgs{
@@ -395,6 +398,7 @@ func (rf *Raft) demote(term, leader int) {
 	rf.leader = leader
 	rf.currentTerm = term
 	rf.votedFor = -1
+	rf.restartTimer()
 }
 
 // func (rf *Raft) timeoutHandler() {
@@ -420,7 +424,7 @@ func (rf *Raft) restartTimer() {
 	if isleader {
 		rf.timer = time.AfterFunc(
 			time.Duration(5+rand.Intn(5))*time.Millisecond,
-			func() { rf.Start(nil) })
+			func() { rf.Start(nil) }) // Heartbeat
 	} else {
 		rf.timer = time.AfterFunc(
 			time.Duration(500+rand.Intn(250))*time.Millisecond,
