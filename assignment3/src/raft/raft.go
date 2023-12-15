@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"errors"
 	"fmt"
 	"labrpc"
 	"math/rand"
@@ -179,17 +180,20 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.currentTerm > args.Term {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
+		fmt.Println("rejecting old term")
 		return
 	}
 
-	if vf == args.CandidateId {
+	if rf.currentTerm < args.Term || vf == args.CandidateId {
 		reply.VoteGranted = true
+		fmt.Printf("server %v voting for itself in term %v", rf.me, args.Term)
 		// reply.Term = -1
 		return
 	}
 
 	if vf != -1 {
 		reply.VoteGranted = false
+		fmt.Printf("server %v voting for %v in term, %v", rf.me, args.CandidateId, args.Term)
 		return
 	}
 
@@ -197,7 +201,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	if L > 0 &&
 		(rf.log[len(rf.log)-1].term > args.LastLogTerm ||
 			len(rf.log)-1 > args.LastLogIndex) {
-
 		reply.VoteGranted = false
 		return
 	}
@@ -223,8 +226,25 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 
+func timeout(duration time.Duration, cb func() bool) (bool, error) {
+	result := make(chan bool, 1)
+	go func() {
+		result <- cb()
+	}()
+
+	select {
+	case <-time.After(duration):
+		return false, errors.New("timed out")
+	case res := <-result:
+		return res, nil
+	}
+}
+
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply, ret chan *RequestVoteReply) {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	ok, _ := timeout(250*time.Millisecond, func() bool {
+		return rf.peers[server].Call("Raft.RequestVote", args, reply)
+	})
+	// ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if ok {
 		ret <- reply
 	} else {
@@ -332,18 +352,19 @@ func (rf *Raft) StartElection() (int, bool) {
 
 	count := 0
 	for i := range rf.peers {
+		if count > len(rf.peers)/2 {
+			break
+		}
 		// select {
 		// // received from AppendEntries RPC if newer leader is found
 		// case term := <-rf.notifyFollow:
 		// 	return term, false
 
-		// // case <-rf.electiontimeout:
-		// // 	return term, false
-
-		// case reply := <-ret:
 		reply := <-ret
 
-		fmt.Printf("Election %v (%v/%v): server %v replied %v with term %v \n", term, i+1, len(rf.peers), reply.Sender, reply.VoteGranted, reply.Term)
+		fmt.Printf("Election %v (%v/%v): server %v replied %v with term %v \n",
+			term, i+1, len(rf.peers), reply.Sender, reply.VoteGranted, reply.Term,
+		)
 		// If you are holding election for an old or same term, end elections
 		if reply.Term > term {
 			fmt.Println("Demoting self")
@@ -388,7 +409,8 @@ func (rf *Raft) Kill() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
-	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	persister *Persister, applyCh chan ApplyMsg,
+) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
