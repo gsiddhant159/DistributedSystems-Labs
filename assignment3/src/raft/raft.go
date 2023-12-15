@@ -117,6 +117,7 @@ type RequestVoteArgs struct {
 type RequestVoteReply struct {
 	Term        int
 	VoteGranted bool
+	Leader      int
 }
 
 type AppendEntryArgs struct {
@@ -130,19 +131,25 @@ type AppendEntryArgs struct {
 type AppendEntryReply struct {
 	Term     int
 	Accepted bool
+	Leader   int
 }
 
 func (rf *Raft) AppendEntry(args AppendEntryArgs, reply *AppendEntryReply) {
 	reply.Term = args.Term
-	if rf.currentTerm > args.Term { // Reject old leader?
+
+	// Reject old leader
+	if rf.currentTerm > args.Term {
 		reply.Accepted = false
 		reply.Term = rf.currentTerm
+		reply.Leader = rf.leader
 		return
 	}
 
+	rf.leader = args.Term
+	rf.restartTimer()
+
 	// Heartbeat check
 	if args.Value == nil {
-		rf.resetTimer()
 		reply.Accepted = true
 		return
 	}
@@ -159,7 +166,6 @@ func (rf *Raft) AppendEntry(args AppendEntryArgs, reply *AppendEntryReply) {
 	// Else, accept incoming request
 	rf.log = append(rf.log, Log{term: args.Term, value: args.Value})
 	reply.Accepted = true
-
 }
 
 // example RequestVote RPC handler.
@@ -276,7 +282,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		reply := <-ret
 		if reply.Term > term {
 			term = reply.Term
-			rf.demote(term, -1)
+			rf.demote(term, reply.Leader)
 			break
 		}
 
@@ -328,6 +334,7 @@ func (rf *Raft) StartElection() (int, bool) {
 		reply := <-ret
 		// If you are holding election for an old or same term, end elections
 		if reply.Term >= term {
+			rf.demote(reply.Term, reply.Leader)
 			return reply.Term, false
 		}
 
@@ -376,7 +383,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	rf.applyCh = applyCh
-	go rf.resetTimer()
+	go rf.restartTimer()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -404,7 +411,7 @@ func (rf *Raft) demote(term, leader int) {
 // 	}
 // }
 
-func (rf *Raft) resetTimer() {
+func (rf *Raft) restartTimer() {
 	if rf.timer != nil {
 		rf.timer.Stop()
 	}
