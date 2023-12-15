@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	"labrpc"
 	"math/rand"
 	"sync"
@@ -55,8 +56,6 @@ type Raft struct {
 	leader   int // index into peers[] of last known leader
 
 	// Timer
-	// notifyFollow chan int // receive notice to follow with new term number
-	// notifyTimeout chan int //TODO placeholder
 	timer *time.Timer
 
 	// Volatile
@@ -64,8 +63,8 @@ type Raft struct {
 	// lastApplied int
 
 	// as a Leader (must be reinitialised each term)
-	nextIndex  []int
-	matchIndex []int
+	// nextIndex  []int
+	// matchIndex []int
 }
 type Log struct {
 	term  int
@@ -118,6 +117,7 @@ type RequestVoteReply struct {
 	Term        int
 	VoteGranted bool
 	Leader      int
+	Sender      int
 }
 
 type AppendEntryArgs struct {
@@ -170,24 +170,30 @@ func (rf *Raft) AppendEntry(args AppendEntryArgs, reply *AppendEntryReply) {
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here.
 	reply.Term = args.Term
+	reply.Sender = rf.me
+	vf := rf.votedFor
 
-	// Simply reject old leader?
+	// Simply reject old election?
 	// if rf.currentTerm > args.Term {
-	if rf.currentTerm >= args.Term {
+	if rf.currentTerm > args.Term {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
 	}
 
-	if vf := rf.votedFor; vf != -1 && vf != args.CandidateId {
+	if vf == args.CandidateId {
+		reply.VoteGranted = true
+		// reply.Term = -1
+		return
+	}
+
+	if vf != -1 {
 		reply.VoteGranted = false
 		return
 	}
 
 	L := len(rf.log)
-
 	if L > 0 &&
 		(rf.log[len(rf.log)-1].term > args.LastLogTerm ||
 			len(rf.log)-1 > args.LastLogIndex) {
@@ -285,7 +291,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		reply := <-ret
 		if reply.Term > term {
 			term = reply.Term
-			rf.demote(term, reply.Leader)
+			rf.follow(term, reply.Leader)
 			break
 		}
 
@@ -306,6 +312,7 @@ func (rf *Raft) StartElection() (int, bool) {
 	term := rf.currentTerm + 1
 	rf.currentTerm = term
 	rf.votedFor = rf.me
+	fmt.Printf("Candidate %v is starting election %v \n", rf.me, term)
 
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -318,13 +325,13 @@ func (rf *Raft) StartElection() (int, bool) {
 		args.LastLogIndex = L - 1
 	}
 
-	ret := make(chan *RequestVoteReply)
+	ret := make(chan *RequestVoteReply, len(rf.peers))
 	for peer := range rf.peers {
 		go rf.sendRequestVote(peer, args, &RequestVoteReply{}, ret)
 	}
 
 	count := 0
-	for range rf.peers {
+	for i := range rf.peers {
 		// select {
 		// // received from AppendEntries RPC if newer leader is found
 		// case term := <-rf.notifyFollow:
@@ -335,9 +342,12 @@ func (rf *Raft) StartElection() (int, bool) {
 
 		// case reply := <-ret:
 		reply := <-ret
+
+		fmt.Printf("Election %v (%v/%v): server %v replied %v with term %v \n", term, i+1, len(rf.peers), reply.Sender, reply.VoteGranted, reply.Term)
 		// If you are holding election for an old or same term, end elections
-		if reply.Term >= term {
-			rf.demote(reply.Term, reply.Leader)
+		if reply.Term > term {
+			fmt.Println("Demoting self")
+			rf.follow(reply.Term, reply.Leader)
 			return reply.Term, false
 		}
 
@@ -348,15 +358,14 @@ func (rf *Raft) StartElection() (int, bool) {
 
 	}
 
+	fmt.Printf("Candidate %v election received %v votes", rf.me, count)
 	if count > len(rf.peers)/2 {
 		rf.currentTerm += 1
 		term = rf.currentTerm
 		rf.leader = rf.me
-		rf.nextIndex = make([]int, 0)
-		rf.matchIndex = make([]int, 0)
 		return term, true
 	} else {
-		// TODO reset election timeout with random backoff
+		rf.restartTimer()
 	}
 	return term, false
 }
@@ -386,7 +395,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	rf.applyCh = applyCh
-	go rf.restartTimer()
+	rf.restartTimer()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -394,7 +403,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-func (rf *Raft) demote(term, leader int) {
+func (rf *Raft) follow(term, leader int) {
 	rf.leader = leader
 	rf.currentTerm = term
 	rf.votedFor = -1
@@ -416,18 +425,20 @@ func (rf *Raft) demote(term, leader int) {
 // }
 
 func (rf *Raft) restartTimer() {
-	if rf.timer != nil {
-		rf.timer.Stop()
-	}
+	go func() {
+		if rf.timer != nil {
+			rf.timer.Stop()
+		}
 
-	_, isleader := rf.GetState()
-	if isleader {
-		rf.timer = time.AfterFunc(
-			time.Duration(5+rand.Intn(5))*time.Millisecond,
-			func() { rf.Start(nil) }) // Heartbeat
-	} else {
-		rf.timer = time.AfterFunc(
-			time.Duration(500+rand.Intn(250))*time.Millisecond,
-			func() { rf.StartElection() })
-	}
+		_, isleader := rf.GetState()
+		if isleader {
+			rf.timer = time.AfterFunc(
+				time.Duration(5+rand.Intn(5))*time.Millisecond,
+				func() { rf.Start(nil) }) // Heartbeat
+		} else {
+			rf.timer = time.AfterFunc(
+				time.Duration(500+rand.Intn(1000))*time.Millisecond,
+				func() { rf.StartElection() })
+		}
+	}()
 }

@@ -52,25 +52,37 @@ func TestReElection(t *testing.T) {
 	leader1 := cfg.checkOneLeader()
 
 	// if the leader disconnects, a new one should be elected.
+	fmt.Println("the leader disconnects, a new one should be elected.")
 	cfg.disconnect(leader1)
 	fmt.Println("leader disconnected")
 	cfg.checkOneLeader()
+	fmt.Println("single leader found")
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the old leader.
+	fmt.Println("if the old leader rejoins, that shouldn't disturb the old leader. reonnecting previous leader")
 	cfg.connect(leader1)
+	fmt.Println("leader reconnected")
 	leader2 := cfg.checkOneLeader()
+	fmt.Println("single leader found")
 
 	// if there's no quorum, no leader should
 	// be elected.
+	fmt.Println("if there's no quorum, no leader should be elected. Disconnecting 2 servers ")
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
+
+	fmt.Println("Sleeping for 2 seconds")
 	time.Sleep(2 * RaftElectionTimeout)
 	cfg.checkNoLeader()
+	fmt.Println("Yes, no leader found")
 
 	// if a quorum arises, it should elect a leader.
+	fmt.Println("Reconnecting previously follower server. New leader should be elected")
 	cfg.connect((leader2 + 1) % servers)
+	fmt.Println("Reconnected")
 	cfg.checkOneLeader()
+	fmt.Println("One leader found")
 
 	// re-join of last node shouldn't prevent leader from existing.
 	cfg.connect(leader2)
