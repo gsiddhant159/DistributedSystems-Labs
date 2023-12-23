@@ -188,7 +188,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	if vf == args.CandidateId {
+	if rf.currentTerm < args.Term || vf == args.CandidateId {
 		reply.VoteGranted = true
 		fmt.Printf("RV: server %v voting for itself in term %v\n", rf.me, args.Term)
 		return
